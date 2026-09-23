@@ -58,6 +58,53 @@
 
   從 [GitHub Releases](https://github.com/vladelaina/BongoCat/releases/latest) 下載最新版本。
 
+## 🔁 Steam 區域網路同步（macOS → Windows）
+
+此分支新增了一個可選的區域網路橋接功能，可將本地的按鍵和滑鼠點擊鏡像到執行 BongoCat **Steam** 版本的 Windows 機器上。接著 Steam 小貓會揮爪，並根據你的 Mac 輸入累積 PawPass / 成就進度，而不會在 Windows 端輸入字元、搶佔焦點或觸發快速鍵。
+
+### 同步的內容
+
+| 本地輸入 | 是否同步 | 對 Steam 小貓的影響 |
+| --- | --- | --- |
+| 鍵盤按鍵按下 | 是，作為通用輕觸 | 揮爪 |
+| 滑鼠左鍵 / 右鍵按下 | 是，作為通用輕觸 | 揮爪 |
+| 滑鼠移動 | 否 | Steam 小貓繼續跟隨 Windows 游標 |
+| 按鍵身分、游標位置 | 否 | 接收端不會重建 |
+
+此協定刻意採用基於輕觸的設計：每次按下傳送一個連接埠 `39824` 上的 `TAP:1` UDP 資料包。接收端只需向遊戲的輸入計數器加入一次輕觸，因此 Steam 小貓的行為與本地按鍵完全一致。傳送端獨立於 Live2D 渲染器，因此即使在使用診斷後端的建置中也能正常運作。
+
+### macOS 傳送端（內建於應用程式）
+
+傳送端位於 `src/core/sync_net.c`，並編譯進應用程式；不需要額外的行程。它預設以廣播模式（`255.255.255.255:39824`）啟用。目標的解析順序如下（後者優先）：
+
+1. 工作目錄中的 `sync.json`
+2. `~/Library/Application Support/BongoCat/config/sync.json`
+3. `BONGO_SYNC_IP` 和 `BONGO_SYNC_PORT` 環境變數
+4. `--sync-ip <address>` 命令列參數
+
+`sync.json`：
+
+```json
+{
+  "target_ip": "192.168.1.100",
+  "target_port": 39824,
+  "enabled": true
+}
+```
+
+設定具體的 `target_ip` 會將傳送端從廣播切換為直接單播，當網路封鎖 UDP 廣播時建議這樣做。隨附的 `tools/` 工具組附帶一個 `sync.json.example` 範本。
+
+### Windows 接收端（Steam 版本）
+
+接收端隨本分支隨附的 `tools/` 工具組提供。有兩種選擇：
+
+- **選項 A —— 遊戲內修補（推薦）。** `install_steam_patch.bat` 會將 `BongoSync.dll` 放入 `BongoCat_Data\Managed\`，並以修補過的建置取代 `Assembly-CSharp.dll`，因此監聽器在遊戲行程內執行，無需啟動其他程式。`uninstall_steam_patch.bat` 會還原原始檔案。
+- **選項 B —— 獨立中繼。** 在 Windows 上執行 `win_bongo_receiver.py`。它會注入一個 Steam 版本已在監看的非字元虛擬鍵（`VK_NONAME`），不會更動遊戲檔案。
+
+兩種接收端都綁定 UDP `39824`。修補會注入到 `BongoCat.OSSpecific.GlobalKeyHook`：`Awake` 啟動監聽器，`Update` 將接收到的輕觸排入 `_keysDown`，`OnApplicationQuit` 停止它，因此輕觸會流經遊戲自身的輕觸處理邏輯。
+
+> **注意：** `BongoSync.dll` 必須針對遊戲剝離後的受控組件進行編譯。有關確切的 `mcs` 呼叫方式和網路疑難排解，請參閱隨附工具組的 `README.md`。
+
 ## 🛠️ 從原始碼建置
 
 BongoCat 使用 CMake，需要 C11 編譯器、C++17 編譯器、CMake 3.24 或更新版本，以及桌面 OpenGL 開發檔案。SDL3、yyjson、stb、miniaudio 和 Nuklear 預設在建置配置時下載，因此首次配置需要網路連線。
@@ -185,6 +232,8 @@ BongoCat 原始碼和原生執行時期採用 [AGPL-3.0-only](LICENSE) 授權。
 
 Windows Raw Input 接收器、macOS Quartz 事件監聽，以及 Linux XInput2 監聽器均執行於主迴圈之外。按鍵和滑鼠按鈕邊緣事件進入有界原子佇列，移動量獨立合併，並透過 SDL 事件喚醒主執行緒。Windows 使用訊息專用視窗，以 `RIDEV_INPUTSINK | RIDEV_DEVNOTIFY` 訂閱背景鍵鼠輸入並保留一般視窗訊息；其他程式隱藏或鎖定游標時，模型使用裝置回報的移動量，桌面跟隨則讀取 SDL 提供的系統游標位置。裝置拔除或輸入桌面切換時會清理按下狀態。Windows 不再安裝輸入鉤子或使用 DirectInput，也不向遊戲傳送輸入。SDL3 視窗、偏好設定和遊戲控制器事件仍在主執行緒處理，平台監聽器不會直接呼叫 Live2D、覆疊層或 UI 程式碼。
 
+輸入分派也會供給一個可選的區域網路輕觸同步器（`src/core/sync_net.c`）。它獨立於 Live2D 和覆疊層路徑，並在每次按鍵按下和滑鼠按鈕按下時傳送一個 `TAP:1` UDP 資料包；滑鼠移動不會被轉送。同步器在停用時為空操作，且由於其通訊端為非阻塞，絕不會阻塞主迴圈。
+
 `bongo_cat_app_run` 負責處理更新、關閉和輔助行程參數，為主要行程強制執行單一實例所有權，分配應用程式狀態，執行初始化，進入 `bongo_cat_app_loop`，然後依序清除狀態並釋放資源。初始化會載入配置和儲存路徑、定位資產、建立 SDL/OpenGL 寵物視窗、初始化平台後端、建立 Live2D、覆疊層和音訊服務、掃描內建／已安裝／鄰近模型來源，並載入可用的模型。`BongoCatApp` 擁有設定、工作階段狀態、模型與行為目錄、平台控制代碼，以及執行時期服務控制代碼。
 
 已安裝的模型套件使用 Mver 作為標準格式。匯入流程會解析選取的檔案或目錄、探索並驗證候選項目、指紋辨識套件識別、將 Tauri 來源轉換為 Mver、套用影像修補，並將標準化套件提交至 `models_root`，接著產生執行時期轉接器並重新整理目錄。鄰近來源則在不安裝其原始碼樹的情況下被探索；其轉接器和檢查結果會快取在 `models_root` 之外的 `cache_root` 下。
@@ -202,6 +251,7 @@ flowchart TB
   BuiltIn(["內建模型資產"])
   Sources(["外部模型來源<br/>Mver、Tauri、.model3.json、影像修補"])
   Desktop(["寵物視窗與偏好設定視窗"])
+  Steam(["Steam BongoCat on Windows<br/>UDP 39824 (optional)"])
 
   subgraph Runtime["BongoCat 原生執行時期"]
     direction TB
@@ -211,6 +261,7 @@ flowchart TB
     Shutdown["關閉<br/>清除狀態、停止服務、釋放資源"]
     InputQueue[("原子輸入狀態<br/>邊緣佇列與合併指標位置")]
     InputDispatch["輸入分派<br/>快捷鍵、指標對應、模型參數"]
+    Sync["LAN tap sync<br/>src/core/sync_net.c"]
     State[("BongoCatApp 狀態<br/>設定、工作階段、目錄、執行時期控制代碼")]
     Import["模型探索與匯入<br/>驗證、正規化為 Mver、安裝／快取"]
     Catalog[("模型與行為目錄")]
@@ -223,6 +274,7 @@ flowchart TB
     Entry --> Startup --> Loop
     Loop --> Shutdown
     Loop --> InputDispatch --> State
+    InputDispatch --> Sync --> Steam
     Loop <--> State
     State --> Live2D
     State --> Overlay

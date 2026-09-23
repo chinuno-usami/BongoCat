@@ -40,6 +40,53 @@
 
   [GitHub Releases](https://github.com/vladelaina/BongoCat/releases/latest)에서 최신 버전을 다운로드하세요.
 
+## 🔁 Steam LAN 동기화 (macOS → Windows)
+
+이 포크는 로컬 키 입력과 마우스 클릭을 **Steam** 빌드의 BongoCat을 실행 중인 Windows 머신으로 미러링하는 선택적 LAN 브리지를 추가합니다. 그러면 Steam 고양이가 앞발을 두드리며 Mac 입력으로부터 PawPass / 업적 진행도를 쌓습니다. Windows 쪽에서는 문자를 입력하거나 포커스를 빼앗거나 단축키를 실행하지 않습니다.
+
+### 동기화되는 항목
+
+| 로컬 입력 | 동기화 여부 | Steam 고양이에 미치는 영향 |
+| --- | --- | --- |
+| 키보드 키 누름 | 예, 일반 탭으로 | 앞발 두드리기 |
+| 마우스 왼쪽 / 오른쪽 버튼 누름 | 예, 일반 탭으로 | 앞발 두드리기 |
+| 마우스 이동 | 아니요 | Steam 고양이는 계속 Windows 커서를 따라갑니다 |
+| 키 식별자, 커서 위치 | 아니요 | 수신기에서 재구성되지 않습니다 |
+
+프로토콜은 의도적으로 탭 기반입니다: 누를 때마다 `TAP:1` UDP 데이터그램을 포트 `39824`로 하나씩 전송합니다. 수신기는 게임의 입력 카운터에 탭을 더하기만 하면 되므로, Steam 고양이는 마치 키를 로컬에서 누른 것처럼 정확히 동작합니다. 송신기는 Live2D 렌더러와 독립적이므로 진단 백엔드를 사용하는 빌드에서도 작동합니다.
+
+### macOS 송신기 (앱에 내장)
+
+송신기는 `src/core/sync_net.c`에 있으며 앱에 컴파일되어 포함됩니다. 추가 프로세스가 필요하지 않습니다. 기본적으로 브로드캐스트 모드(`255.255.255.255:39824`)로 활성화됩니다. 대상은 다음 순서로 결정됩니다(뒤에 있는 것이 우선):
+
+1. 작업 디렉토리의 `sync.json`
+2. `~/Library/Application Support/BongoCat/config/sync.json`
+3. `BONGO_SYNC_IP` 및 `BONGO_SYNC_PORT` 환경 변수
+4. `--sync-ip <address>` 명령줄 인자
+
+`sync.json`:
+
+```json
+{
+  "target_ip": "192.168.1.100",
+  "target_port": 39824,
+  "enabled": true
+}
+```
+
+구체적인 `target_ip`를 설정하면 송신기가 브로드캐스트에서 직접 유니캐스트로 전환되며, 네트워크에서 UDP 브로드캐스트를 차단하는 경우 권장됩니다. 함께 제공되는 `tools/` 키트에는 `sync.json.example` 템플릿이 포함되어 있습니다.
+
+### Windows 수신기 (Steam 빌드)
+
+수신기는 이 포크와 함께 제공되는 `tools/` 키트에 포함되어 있습니다. 두 가지 옵션이 있습니다:
+
+- **옵션 A — 인게임 패치 (권장).** `install_steam_patch.bat`가 `BongoSync.dll`을 `BongoCat_Data\Managed\`에 배치하고 `Assembly-CSharp.dll`을 패치된 빌드로 교체하므로, 리스너가 게임 프로세스 내부에서 실행되고 다른 것을 실행할 필요가 없습니다. `uninstall_steam_patch.bat`는 원본 파일을 복원합니다.
+- **옵션 B — 독립 실행형 릴레이.** Windows에서 `win_bongo_receiver.py`를 실행하세요. Steam 빌드가 이미 감시하는 비문자 가상 키(`VK_NONAME`)를 주입하며, 게임 파일은 그대로 둡니다.
+
+두 수신기 모두 UDP `39824`를 바인딩합니다. 패치는 `BongoCat.OSSpecific.GlobalKeyHook`에 주입됩니다: `Awake`가 리스너를 시작하고, `Update`가 수신된 탭을 `_keysDown`으로 비우며, `OnApplicationQuit`가 중지하므로, 탭은 게임 자체의 탭 처리 흐름을 통해 전달됩니다.
+
+> **참고:** `BongoSync.dll`은 게임의 스트립된 관리 어셈블리에 대해 컴파일해야 합니다. 정확한 `mcs` 호출 및 네트워크 문제 해결은 함께 제공되는 키트의 `README.md`를 참조하세요.
+
 ## 🛠️ 소스 코드로 빌드하기
 
 BongoCat은 CMake를 사용하며, C11 컴파일러, C++17 컴파일러, CMake 3.24 이상, 데스크톱 OpenGL 개발 파일이 필요합니다. 기본적으로 SDL3, yyjson, stb, miniaudio 및 Nuklear는 구성 단계에서 자동으로 다운로드되므로, 첫 구성 시 네트워크 연결이 필요합니다.
@@ -162,6 +209,8 @@ BongoCat 소스 코드 및 로컬 런타임은 [AGPL-3.0-only](../LICENSE) 라�
 
 Windows Raw Input 수신기, macOS Quartz 이벤트 탭, Linux XInput2 리스너는 메인 루프 외부에서 실행됩니다. 키와 마우스 버튼 이벤트는 유계 원자 큐에 전달하고, 이동량은 별도로 합치며 SDL 이벤트로 메인 스레드를 깨웁니다. Windows는 메시지 전용 창에 `RIDEV_INPUTSINK | RIDEV_DEVNOTIFY`를 등록하여 일반 창 메시지를 유지하면서 백그라운드 입력을 받습니다. 다른 프로그램이 커서를 숨기거나 잠그면 모델은 장치가 보고한 이동량을 사용하고, 바탕 화면에서는 SDL이 시스템 커서 위치를 제공합니다. 장치를 분리하거나 입력 데스크톱을 전환하면 눌림 상태를 정리합니다. Windows는 더 이상 입력 훅이나 DirectInput을 사용하지 않습니다. SDL3 창, 환경 설정 및 게임패드 이벤트는 메인 스레드에서 처리하며 플랫폼 리스너는 Live2D, 오버레이 또는 UI 코드를 직접 호출하지 않습니다.
 
+입력 처리는 또한 선택적 LAN 탭 동기화기(`src/core/sync_net.c`)에 데이터를 전달합니다. 이는 Live2D 및 오버레이 경로와 독립적이며, 키 누름과 마우스 버튼 누름마다 `TAP:1` UDP 데이터그램을 하나씩 전송합니다. 마우스 이동은 전달되지 않습니다. 동기화기는 비활성화되면 아무 동작도 하지 않으며, 소켓이 비차단이므로 메인 루프를 차단하지 않습니다.
+
 `bongo_cat_app_run`은 업데이트, 종료 및 보조 프로세스 파라미터를 담당하여 메인 프로세스의 단일 인스턴스 소유권을 보장하고, 애플리케이션 상태를 할당하며, 초기화를 수행하고, `bongo_cat_app_loop`로 진입한 후 정의된 순서대로 상태를 플러시하고 리소스를 소멸시킵니다. 초기화는 구성 및 저장 경로를 로드하고, 리소스를 찾고, SDL/OpenGL 펫 창을 생성하고, 플랫폼 백엔드를 초기화하고, Live2D/오버레이/오디오 서비스를 생성하고, 내장/설치/근처 모델 소스를 스캔하고, 사용 가능한 모델을 로드합니다. `BongoCatApp`은 설정, 세션 상태, 모델 및 동작 카탈로그, 플랫폼 핸들 및 런타임 서비스 핸들을 보유합니다.
 
 설치된 모델 패키지는 Mver을 표준 형식으로 사용합니다. 가져오기 프로세스는 선택한 파일이나 디렉토리를 구문 분석하고, 후보를 발견 및 검증하고, 패키지 ID 지문을 생성하고, Tauri 소스를 Mver로 변환하고, 이미지 패치를 적용하고, 정규화된 패키지를 `models_root`에 제출합니다. 그런 다음 런타임 어댑터를 생성하고 카탈로그를 새로 고칩니다. 근처 소스는 소스 디렉토리를 설치하지 않고 발견되며, 해당 어댑터와 검사 결과는 `models_root` 외부의 `cache_root` 아래에 캐시됩니다.
@@ -178,6 +227,7 @@ flowchart TB
   BuiltIn(["내장 모델 리소스"])
   Sources(["외부 모델 소스<br/>Mver, Tauri, .model3.json, 이미지 패치"])
   Desktop(["펫 창 및 환경 설정 창"])
+  Steam(["Steam BongoCat on Windows<br/>UDP 39824 (optional)"])
   subgraph Runtime["BongoCat 네이티브 런타임"]
     direction TB
     Entry["src/main.c<br/>bongo_cat_app_run"]
@@ -186,6 +236,7 @@ flowchart TB
     Shutdown["종료<br/>상태 플러시, 서비스 중지, 리소스 해제"]
     InputQueue[("원자 입력 상태<br/>에지 큐 및 병합된 포인터 위치")]
     InputDispatch["입력 처리<br/>단축키, 포인터 매핑, 모델 파라미터"]
+    Sync["LAN tap sync<br/>src/core/sync_net.c"]
     State[("BongoCatApp 상태<br/>설정, 세션, 카탈로그, 런타임 핸들")]
     Import["모델 발견 및 가져오기<br/>검증, Mver로 정규화, 설치/캐싱"]
     Catalog[("모델 및 동작 카탈로그")]
@@ -197,6 +248,7 @@ flowchart TB
     Entry --> Startup --> Loop
     Loop --> Shutdown
     Loop --> InputDispatch --> State
+    InputDispatch --> Sync --> Steam
     Loop <--> State
     State --> Live2D
     State --> Overlay

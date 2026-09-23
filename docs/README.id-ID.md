@@ -59,6 +59,79 @@
 
   Unduh rilis terbaru dari [GitHub Releases](https://github.com/vladelaina/BongoCat/releases/latest).
 
+## 🔁 Sinkronisasi LAN Steam (macOS → Windows)
+
+Fork ini menambahkan jembatan LAN opsional yang mencerminkan penekanan tombol
+dan klik mouse lokal ke komputer Windows yang menjalankan build BongoCat
+**Steam**. Kucing Steam kemudian menepuk cakarnya dan mengumpulkan progres
+PawPass / pencapaian dari input Mac Anda, tanpa mengetik karakter, merebut
+fokus, atau memicu shortcut di sisi Windows.
+
+### Apa yang disinkronkan
+
+| Input lokal | Disinkronkan | Efek pada kucing Steam |
+| --- | --- | --- |
+| Tombol keyboard ditekan | Ya, sebagai tap generik | Tepukan cakar |
+| Tombol kiri / kanan mouse ditekan | Ya, sebagai tap generik | Tepukan cakar |
+| Pergerakan mouse | Tidak | Kucing Steam tetap mengikuti kursor Windows |
+| Identitas tombol, posisi kursor | Tidak | Tidak direkonstruksi oleh penerima |
+
+Protokolnya sengaja berbasis tap: satu datagram UDP `TAP:1` pada port `39824`
+per penekanan. Penerima hanya perlu menambahkan tap ke penghitung input game,
+sehingga kucing Steam berperilaku persis seperti tombol ditekan secara lokal.
+Pengirim tidak bergantung pada renderer Live2D, sehingga berfungsi bahkan pada
+build yang menggunakan backend diagnostik.
+
+### Pengirim macOS (tertanam di aplikasi)
+
+Pengirim berada di `src/core/sync_net.c` dan dikompilasi ke dalam aplikasi;
+tidak diperlukan proses tambahan. Pengirim diaktifkan secara default dalam mode
+siaran (`255.255.255.255:39824`). Target diresolusikan dalam urutan ini (yang
+terakhir menang):
+
+1. `sync.json` di direktori kerja
+2. `~/Library/Application Support/BongoCat/config/sync.json`
+3. Variabel lingkungan `BONGO_SYNC_IP` dan `BONGO_SYNC_PORT`
+4. Argumen baris perintah `--sync-ip <address>`
+
+`sync.json`:
+
+```json
+{
+  "target_ip": "192.168.1.100",
+  "target_port": 39824,
+  "enabled": true
+}
+```
+
+Menetapkan `target_ip` yang konkret mengalihkan pengirim dari siaran ke unicast
+langsung, yang direkomendasikan saat jaringan memblokir siaran UDP. Kit
+pendamping `tools/` menyertakan templat `sync.json.example`.
+
+### Penerima Windows (build Steam)
+
+Penerima disertakan dalam kit pendamping `tools/` yang menyertai fork ini.
+Tersedia dua opsi:
+
+- **Opsi A — patch dalam game (direkomendasikan).** `install_steam_patch.bat`
+  menempatkan `BongoSync.dll` di `BongoCat_Data\Managed\` dan mengganti
+  `Assembly-CSharp.dll` dengan build yang sudah dipatch, sehingga listener
+  berjalan di dalam proses game dan tidak ada lagi yang perlu diluncurkan.
+  `uninstall_steam_patch.bat` memulihkan file asli.
+- **Opsi B — relay mandiri.** Jalankan `win_bongo_receiver.py` di Windows. Ini
+  menyuntikkan virtual key non-karakter (`VK_NONAME`) yang sudah dipantau oleh
+  build Steam, sehingga file game tidak tersentuh.
+
+Kedua penerima mengikat UDP `39824`. Patch menyuntik ke
+`BongoCat.OSSpecific.GlobalKeyHook`: `Awake` memulai listener, `Update`
+mengalirkan tap yang diterima ke `_keysDown`, dan `OnApplicationQuit`
+menghentikannya, sehingga tap mengalir melalui penanganan tap milik game itu
+sendiri.
+
+> **Catatan:** `BongoSync.dll` harus dikompilasi terhadap assembly terkelola
+> game yang sudah di-strip. Lihat `README.md` kit pendamping untuk pemanggilan
+> `mcs` yang tepat dan pemecahan masalah jaringan.
+
 ## 🛠️ Membangun dari Kode Sumber
 
 BongoCat menggunakan CMake dan memerlukan compiler C11, compiler C++17, CMake 3.24
@@ -221,6 +294,13 @@ tempat event gamepad dinormalisasi sebelum mencapai parameter model atau
 shortcut. Tidak ada listener platform yang memanggil kode Live2D, overlay, atau
 UI secara langsung.
 
+Dispatch input juga memberi umpan ke sinkronisasi tap LAN opsional
+(`src/core/sync_net.c`). Ini independen dari jalur Live2D dan overlay serta
+mengirim satu datagram UDP `TAP:1` pada setiap key-down dan mouse-button-down;
+gerakan mouse tidak diteruskan. Sinkronisasi tidak melakukan apa-apa saat
+dinonaktifkan dan tidak pernah memblokir main loop karena socket-nya
+non-blocking.
+
 `bongo_cat_app_run` menangani update-shutdown dan argumen proses sekunder,
 memastikan kepemilikan single-instance untuk proses utama, mengalokasikan state
 aplikasi, menjalankan inisialisasi, masuk ke `bongo_cat_app_loop`, lalu melakukan
@@ -274,6 +354,7 @@ flowchart TB
   BuiltIn(["Aset model bawaan"])
   Sources(["Sumber model eksternal<br/>Mver, Tauri, .model3.json, patch gambar"])
   Desktop(["Jendela pet dan jendela preferensi"])
+  Steam(["Steam BongoCat on Windows<br/>UDP 39824 (optional)"])
 
   subgraph Runtime["Runtime native BongoCat"]
     direction TB
@@ -283,6 +364,7 @@ flowchart TB
     Shutdown["Shutdown<br/>flush state, hentikan layanan, lepaskan resource"]
     InputQueue[("State input atomik<br/>antrean edge dan posisi pointer yang digabungkan")]
     InputDispatch["Dispatch input<br/>shortcut, pemetaan pointer, parameter model"]
+    Sync["LAN tap sync<br/>src/core/sync_net.c"]
     State[("State BongoCatApp<br/>pengaturan, sesi, katalog, handle runtime")]
     Import["Penemuan dan impor model<br/>validasi, normalisasi ke Mver, instal/cache"]
     Catalog[("Katalog model dan perilaku")]
@@ -295,6 +377,7 @@ flowchart TB
     Entry --> Startup --> Loop
     Loop --> Shutdown
     Loop --> InputDispatch --> State
+    InputDispatch --> Sync --> Steam
     Loop <--> State
     State --> Live2D
     State --> Overlay

@@ -56,6 +56,81 @@
 
   Téléchargez la dernière version depuis [GitHub Releases](https://github.com/vladelaina/BongoCat/releases/latest).
 
+## 🔁 Synchronisation Steam en réseau local (macOS → Windows)
+
+Ce fork ajoute un pont réseau local facultatif qui reproduit les appuis de
+touches et les clics de souris locaux vers une machine Windows exécutant la
+version **Steam** de BongoCat. Le chat Steam donne alors des coups de patte et
+accumule de la progression PawPass / des succès à partir de vos entrées sur
+Mac, sans saisir de caractères, sans voler le focus et sans déclencher de
+raccourcis côté Windows.
+
+### Ce qui est synchronisé
+
+| Entrée locale | Synchronisée | Effet sur le chat Steam |
+| --- | --- | --- |
+| Appui sur une touche du clavier | Oui, sous forme d'appui générique | Coup de patte |
+| Appui sur le bouton gauche / droit de la souris | Oui, sous forme d'appui générique | Coup de patte |
+| Mouvement de la souris | Non | Le chat Steam continue de suivre le curseur Windows |
+| Identité de la touche, position du curseur | Non | Non reconstruites par le récepteur |
+
+Le protocole repose délibérément sur des appuis : un datagramme UDP `TAP:1`
+sur le port `39824` par appui. Le récepteur doit simplement ajouter un appui
+au compteur d'entrées du jeu, de sorte que le chat Steam se comporte exactement
+comme si la touche avait été pressée localement. L'émetteur est indépendant du
+renderer Live2D, il fonctionne donc même dans les compilations utilisant le
+backend de diagnostic.
+
+### Émetteur macOS (intégré à l'application)
+
+L'émetteur réside dans `src/core/sync_net.c` et est compilé dans l'application ;
+aucun processus supplémentaire n'est requis. Il est activé par défaut en mode
+diffusion (`255.255.255.255:39824`). La cible est résolue dans cet ordre (le
+dernier l'emporte) :
+
+1. `sync.json` dans le répertoire de travail
+2. `~/Library/Application Support/BongoCat/config/sync.json`
+3. les variables d'environnement `BONGO_SYNC_IP` et `BONGO_SYNC_PORT`
+4. l'argument de ligne de commande `--sync-ip <address>`
+
+`sync.json` :
+
+```json
+{
+  "target_ip": "192.168.1.100",
+  "target_port": 39824,
+  "enabled": true
+}
+```
+
+Définir un `target_ip` concret fait passer l'émetteur de la diffusion à
+l'unidiffusion directe, ce qui est recommandé lorsque le réseau bloque la
+diffusion UDP. Le kit complémentaire `tools/` fournit un modèle
+`sync.json.example`.
+
+### Récepteur Windows (version Steam)
+
+Le récepteur est fourni dans le kit complémentaire `tools/` qui accompagne ce
+fork. Deux options sont disponibles :
+
+- **Option A — correctif intégré au jeu (recommandé).** `install_steam_patch.bat`
+  place `BongoSync.dll` dans `BongoCat_Data\Managed\` et remplace
+  `Assembly-CSharp.dll` par la compilation corrigée, de sorte que l'écouteur
+  s'exécute dans le processus du jeu et que rien d'autre ne doit être lancé.
+  `uninstall_steam_patch.bat` restaure les fichiers d'origine.
+- **Option B — relais autonome.** Exécutez `win_bongo_receiver.py` sous Windows.
+  Il injecte une touche virtuelle sans caractère (`VK_NONAME`) que la version
+  Steam surveille déjà, sans modifier les fichiers du jeu.
+
+Les deux récepteurs se lient à l'UDP `39824`. Le correctif s'injecte dans
+`BongoCat.OSSpecific.GlobalKeyHook` : `Awake` démarre l'écouteur, `Update`
+vide les appuis reçus dans `_keysDown`, et `OnApplicationQuit` l'arrête, de
+sorte que les appuis passent par la gestion des appuis du jeu lui-même.
+
+> **Note:** `BongoSync.dll` doit être compilé contre les assemblys managés
+> allégés du jeu. Consultez le `README.md` du kit complémentaire pour
+> l'invocation `mcs` exacte et le dépannage réseau.
+
 ## 🛠️ Compilation depuis les sources
 
 BongoCat utilise CMake et nécessite un compilateur C11, un compilateur C++17,
@@ -227,6 +302,13 @@ avant d'atteindre les paramètres du modèle ou les raccourcis. Aucun écouteur
 de plateforme n'appelle directement le code Live2D, celui de l'overlay ou
 celui de l'interface utilisateur.
 
+La distribution des entrées alimente également un synchroniseur d'appuis en
+réseau local facultatif (`src/core/sync_net.c`). Il est indépendant des chemins
+Live2D et de l'overlay et envoie un unique datagramme UDP `TAP:1` à chaque
+appui de touche et de bouton de souris ; le mouvement de la souris n'est pas
+transmis. Le synchroniseur ne fait rien lorsqu'il est désactivé et ne bloque
+jamais la boucle principale, car son socket est non bloquant.
+
 `bongo_cat_app_run` gère l'arrêt lié aux mises à jour ainsi que les arguments
 des processus secondaires, impose une instance unique pour le processus
 principal, alloue l'état de l'application, exécute l'initialisation, entre dans
@@ -294,6 +376,7 @@ flowchart TB
   BuiltIn(["Ressources des modèles intégrés"])
   Sources(["Sources de modèles externes<br/>Mver, Tauri, .model3.json, correctifs d'image"])
   Desktop(["Fenêtre de l'animal et fenêtre des préférences"])
+  Steam(["Steam BongoCat on Windows<br/>UDP 39824 (optional)"])
   subgraph Runtime["Runtime natif BongoCat"]
     direction TB
     Entry["src/main.c<br/>bongo_cat_app_run"]
@@ -302,6 +385,7 @@ flowchart TB
     Shutdown["Arrêt<br/>enregistrement de l'état, arrêt des services, libération des ressources"]
     InputQueue[("État atomique des entrées<br/>file de transitions et position du pointeur coalescée")]
     InputDispatch["Distribution des entrées<br/>raccourcis, mappage du pointeur, paramètres du modèle"]
+    Sync["LAN tap sync<br/>src/core/sync_net.c"]
     State[("État BongoCatApp<br/>paramètres, session, catalogues, handles d'exécution")]
     Import["Découverte et importation des modèles<br/>validation, normalisation vers Mver, installation/cache"]
     Catalog[("Catalogues des modèles et comportements")]
@@ -313,6 +397,7 @@ flowchart TB
     Entry --> Startup --> Loop
     Loop --> Shutdown
     Loop --> InputDispatch --> State
+    InputDispatch --> Sync --> Steam
     Loop <--> State
     State --> Live2D
     State --> Overlay

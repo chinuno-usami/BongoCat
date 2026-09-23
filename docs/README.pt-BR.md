@@ -40,6 +40,53 @@
 
   Baixe a versão mais recente nas [GitHub Releases](https://github.com/vladelaina/BongoCat/releases/latest).
 
+## 🔁 Sincronização por LAN do Steam (macOS → Windows)
+
+Este fork adiciona uma ponte LAN opcional que espelha os pressionamentos de tecla e os cliques do mouse locais para uma máquina Windows executando a versão **Steam** do BongoCat. O gato do Steam então dá patadas e acumula progresso de PawPass / conquistas a partir da entrada do seu Mac, sem digitar caracteres, roubar o foco ou disparar atalhos no lado do Windows.
+
+### O que é sincronizado
+
+| Entrada local | Sincronizada | Efeito no gato do Steam |
+| --- | --- | --- |
+| Pressionamento de tecla | Sim, como um toque genérico | Patada |
+| Pressionamento do botão esquerdo / direito do mouse | Sim, como um toque genérico | Patada |
+| Movimento do mouse | Não | O gato do Steam continua seguindo o cursor do Windows |
+| Identidade da tecla, posição do cursor | Não | Não são reconstruídas pelo receptor |
+
+O protocolo é deliberadamente baseado em toques: um único datagrama UDP `TAP:1` na porta `39824` por pressionamento. O receptor só precisa adicionar um toque ao contador de entrada do jogo, então o gato do Steam se comporta exatamente como se a tecla tivesse sido pressionada localmente. O emissor é independente do renderizador Live2D, então funciona até em builds que usam o backend de diagnóstico.
+
+### Emissor do macOS (integrado ao aplicativo)
+
+O emissor fica em `src/core/sync_net.c` e é compilado no aplicativo; nenhum processo extra é necessário. Ele vem habilitado por padrão no modo broadcast (`255.255.255.255:39824`). O destino é resolvido nesta ordem (o último prevalece):
+
+1. `sync.json` no diretório de trabalho
+2. `~/Library/Application Support/BongoCat/config/sync.json`
+3. As variáveis de ambiente `BONGO_SYNC_IP` e `BONGO_SYNC_PORT`
+4. O argumento de linha de comando `--sync-ip <address>`
+
+`sync.json`:
+
+```json
+{
+  "target_ip": "192.168.1.100",
+  "target_port": 39824,
+  "enabled": true
+}
+```
+
+Definir um `target_ip` concreto muda o emissor de broadcast para unicast direto, o que é recomendado quando a rede bloqueia broadcast UDP. O kit complementar `tools/` inclui um modelo `sync.json.example`.
+
+### Receptor do Windows (versão Steam)
+
+O receptor é distribuído no kit complementar `tools/` que acompanha este fork. Duas opções estão disponíveis:
+
+- **Opção A — patch dentro do jogo (recomendada).** `install_steam_patch.bat` coloca `BongoSync.dll` em `BongoCat_Data\Managed\` e substitui `Assembly-CSharp.dll` pela build corrigida, de modo que o listener é executado dentro do processo do jogo e nada mais precisa ser iniciado. `uninstall_steam_patch.bat` restaura os arquivos originais.
+- **Opção B — relay autônomo.** Execute `win_bongo_receiver.py` no Windows. Ele injeta uma tecla virtual que não produz caracteres (`VK_NONAME`) que a versão Steam já monitora, sem tocar nos arquivos do jogo.
+
+Ambos os receptores usam a porta UDP `39824`. O patch injeta em `BongoCat.OSSpecific.GlobalKeyHook`: `Awake` inicia o listener, `Update` drena os toques recebidos em `_keysDown` e `OnApplicationQuit` o interrompe, de modo que os toques fluem pelo próprio tratamento de toques do jogo.
+
+> **Nota:** `BongoSync.dll` precisa ser compilado contra os assemblies gerenciados reduzidos do jogo. Consulte o `README.md` do kit complementar para ver a invocação exata de `mcs` e a solução de problemas de rede.
+
 ## 🛠️ Compilar a partir do código-fonte
 
 O BongoCat usa CMake e requer um compilador C11, um compilador C++17, CMake 3.24 ou superior e os arquivos de desenvolvimento de OpenGL para desktop. Por padrão, SDL3, yyjson, stb, miniaudio e Nuklear são baixados automaticamente durante a configuração, portanto a primeira configuração requer conexão com a internet.
@@ -162,6 +209,8 @@ Listeners de plataforma (teclado/ponteiro)
 
 O receptor Raw Input do Windows, o tap de eventos Quartz do macOS e os listeners XInput2 do Linux são executados fora do loop principal. Eventos de teclas e botões entram em uma fila atômica limitada; os movimentos são agrupados separadamente e eventos SDL despertam a thread principal. O Windows recebe entradas em segundo plano por uma janela de mensagens com `RIDEV_INPUTSINK | RIDEV_DEVNOTIFY`, preservando as mensagens comuns. Quando outro aplicativo oculta ou bloqueia o cursor, o modelo usa os movimentos do dispositivo; o SDL fornece a posição do cursor na área de trabalho. Estados pressionados são limpos ao desconectar um dispositivo ou mudar a área de trabalho de entrada. O Windows não usa mais hooks de entrada nem DirectInput. Eventos de janela, preferências e gamepad do SDL3 são processados na thread principal. Nenhum listener de plataforma chama diretamente o código de Live2D, sobreposições ou interface.
 
+O despacho de entrada também alimenta um sincronizador opcional de toques por LAN (`src/core/sync_net.c`). Ele é independente dos caminhos de Live2D e de sobreposições e envia um único datagrama UDP `TAP:1` a cada pressionamento de tecla e de botão do mouse; o movimento do mouse não é encaminhado. O sincronizador não faz nada quando desabilitado e nunca bloqueia o loop principal, porque seu socket não bloqueia.
+
 `bongo_cat_app_run` trata dos parâmetros de atualização, encerramento e processos secundários, impõe a propriedade de instância única do processo principal, aloca o estado do aplicativo, executa a inicialização, entra em `bongo_cat_app_loop` e, em seguida, atualiza o estado e destrói os recursos na ordem definida. A inicialização carrega a configuração e os caminhos de armazenamento, localiza os recursos, cria a janela de mascote SDL/OpenGL, inicializa os backends de plataforma, cria os serviços de Live2D/sobreposições/áudio, verifica fontes de modelos integradas/instaladas/próximas e carrega os modelos disponíveis. `BongoCatApp` mantém as configurações, o estado da sessão, os catálogos de modelos e comportamentos, os identificadores de plataforma e os identificadores de serviços de runtime.
 
 Os pacotes de modelos instalados usam Mver como formato canônico. O processo de importação analisa o arquivo ou diretório selecionado, descobre e valida candidatos, gera uma impressão digital de identidade do pacote, converte fontes Tauri em Mver, aplica patches de imagem e envia o pacote normalizado para `models_root`. Em seguida, os adaptadores de runtime são gerados e o catálogo é atualizado. Fontes próximas são descobertas apenas sem instalar a árvore de origem; seus adaptadores e resultados de verificação são armazenados em cache sob `cache_root`, fora de `models_root`.
@@ -178,6 +227,7 @@ flowchart TB
   BuiltIn(["Recursos de modelos integrados"])
   Sources(["Fontes de modelos externos<br/>Mver, Tauri, .model3.json, patches de imagem"])
   Desktop(["Janela de mascote e janela de preferências"])
+  Steam(["Steam BongoCat on Windows<br/>UDP 39824 (optional)"])
   subgraph Runtime["Runtime nativo do BongoCat"]
     direction TB
     Entry["src/main.c<br/>bongo_cat_app_run"]
@@ -186,6 +236,7 @@ flowchart TB
     Shutdown["Encerramento<br/>Atualizar estado, parar serviços, liberar recursos"]
     InputQueue[("Estado de entrada atômico<br/>Fila de bordas e posição do ponteiro mesclada")]
     InputDispatch["Distribuição de entrada<br/>Atalhos, mapeamento do ponteiro, parâmetros do modelo"]
+    Sync["LAN tap sync<br/>src/core/sync_net.c"]
     State[("Estado do BongoCatApp<br/>Configurações, sessão, catálogo, identificadores de runtime")]
     Import["Descoberta e importação de modelos<br/>Validação, normalização para Mver, instalação/cache"]
     Catalog[("Catálogo de modelos e comportamentos")]
@@ -197,6 +248,7 @@ flowchart TB
     Entry --> Startup --> Loop
     Loop --> Shutdown
     Loop --> InputDispatch --> State
+    InputDispatch --> Sync --> Steam
     Loop <--> State
     State --> Live2D
     State --> Overlay
