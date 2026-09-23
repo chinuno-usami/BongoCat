@@ -3,6 +3,7 @@
 #include "bongo_cat/shortcut.h"
 #include "bongo_cat/log.h"
 #include "bongo_cat/overlay.h"
+#include "bongo_cat/sync_net.h"
 
 #include <string.h>
 
@@ -135,6 +136,10 @@ void bongo_cat_app_drain_input(BongoCatApp *app, bool allow_shortcuts) {
             /* Suppress actions, not key transitions: releases may arrive
                while a shortcut is being recorded or a modal menu is open. */
             suppress_shortcut(app, &event);
+        }
+        if (event.kind == BONGO_CAT_INPUT_KEY_DOWN ||
+            event.kind == BONGO_CAT_INPUT_MOUSE_DOWN) {
+            bongo_cat_sync_net_send_tap();
         }
         bongo_cat_app_apply_input(app, &event);
     }

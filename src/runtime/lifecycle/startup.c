@@ -3,6 +3,7 @@
 #include "bongo_cat/file.h"
 #include "bongo_cat/log.h"
 #include "bongo_cat/path.h"
+#include "bongo_cat/sync_net.h"
 #include "storage_paths.h"
 
 #include <stdint.h>
@@ -159,8 +160,9 @@ static void begin_log(BongoCatApp *app) {
 
 bool bongo_cat_startup_prepare(BongoCatApp *app, int argc, char **argv,
     BongoCatError *error) {
-    if (!bongo_cat_startup_arguments(app, argc, argv, error) ||
-        !bongo_cat_storage_paths_prepare(app, error)) return false;
+    if (!bongo_cat_startup_arguments(app, argc, argv, error)) return false;
+    bongo_cat_sync_net_init(NULL);
+    if (!bongo_cat_storage_paths_prepare(app, error)) return false;
     begin_log(app); bongo_cat_startup_stage(app, "paths-ready"); return true;
 }
 

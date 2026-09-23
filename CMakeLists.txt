@@ -89,6 +89,7 @@ add_library(bongo_cat_core STATIC
   src/core/model_behavior.c src/core/model_json.c
   src/core/path.c src/core/path_io.c src/core/json.c src/core/shortcut.c
   src/core/sound_shortcut.c
+  src/core/sync_net.c
   src/core/update_release.c src/core/update_version.c)
 target_include_directories(bongo_cat_core PUBLIC "${BONGO_CAT_GENERATED_INCLUDE_DIR}" include)
 target_link_libraries(bongo_cat_core PUBLIC yyjson PRIVATE bongo_cat_warnings)

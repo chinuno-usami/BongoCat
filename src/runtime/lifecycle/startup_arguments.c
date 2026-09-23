@@ -1,5 +1,6 @@
 #include "runtime.h"
 #include "bongo_cat/i18n.h"
+#include "bongo_cat/sync_net.h"
 
 #include <SDL3/SDL.h>
 #include <limits.h>
@@ -91,6 +92,16 @@ bool bongo_cat_startup_arguments(BongoCatApp *app, int argc, char **argv,
         } else if (strncmp(arg, "--nearby-root=", 14) == 0) {
             if (!store_argument(app->nearby_root, sizeof(app->nearby_root),
                 arg + 14, "Nearby model", error)) return false;
+        } else if (strcmp(arg, "--sync-ip") == 0 && i + 1 < argc) {
+            bongo_cat_sync_net_set_target(argv[++i], 39824);
+        } else if (strncmp(arg, "--sync-ip=", 10) == 0) {
+            bongo_cat_sync_net_set_target(arg + 10, 39824);
+        } else if (strcmp(arg, "--sync-port") == 0 && i + 1 < argc) {
+            int port = atoi(argv[++i]);
+            if (port > 0 && port <= 65535) bongo_cat_sync_net_set_target(NULL, (uint16_t)port);
+        } else if (strncmp(arg, "--sync-port=", 12) == 0) {
+            int port = atoi(arg + 12);
+            if (port > 0 && port <= 65535) bongo_cat_sync_net_set_target(NULL, (uint16_t)port);
         } else if (strncmp(arg, "--secondary-pet=", 16) == 0) {
             if (!store_argument(app->secondary_model_id,
                 sizeof(app->secondary_model_id), arg + 16,

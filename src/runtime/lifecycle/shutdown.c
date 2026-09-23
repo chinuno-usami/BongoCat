@@ -6,6 +6,7 @@
 #include "bongo_cat/overlay.h"
 #include "bongo_cat/preferences.h"
 #include "bongo_cat/tray.h"
+#include "bongo_cat/sync_net.h"
 
 #include <stdlib.h>
 
@@ -37,6 +38,7 @@ void bongo_cat_app_shutdown(BongoCatApp *app, const char *stage,
     bongo_cat_behaviors_clear(app->behavior_cache); free(app->behavior_cache);
     app->behavior_cache = NULL;
     bongo_cat_platform_shutdown(&app->platform);
+    bongo_cat_sync_net_shutdown();
     bongo_cat_runtime_log_stop();
     bongo_cat_window_destroy(app);
     bongo_cat_runtime_clean_shutdown(app, exit_code);
